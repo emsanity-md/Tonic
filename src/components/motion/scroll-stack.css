@@ -1,0 +1,65 @@
+/*
+ * ScrollStack — adapted from reactbits.dev for this project.
+ * Changes: tokenised colours instead of light-dark(), no drop shadows (the
+ * design keeps depth to hairlines and a faint scrim), no hardcoded card height
+ * so section content sizes itself, and no horizontal padding here because the
+ * sections already own their single padding scale (.section-x).
+ */
+
+.scroll-stack {
+  position: relative;
+  width: 100%;
+}
+
+.scroll-stack--window {
+  overflow: visible;
+}
+
+.scroll-stack--contained {
+  height: 100%;
+  overflow-x: clip;
+  overflow-y: auto;
+}
+
+.scroll-stack__inner {
+  position: relative;
+  padding-inline: 0;
+}
+
+.scroll-stack__slot {
+  position: sticky;
+}
+
+.scroll-stack-card {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--background);
+  color: var(--foreground);
+  transform-origin: 50% 0;
+  will-change: transform;
+  overflow: hidden;
+}
+
+/* The section keeps its own vertical rhythm; the card supplies the horizontal
+   inset so panels read as objects while every panel shares one padding value. */
+.scroll-stack-card > section {
+  border-top: 0;
+  border-radius: inherit;
+}
+
+.scroll-stack-card > section > .section-x {
+  padding-inline: clamp(1.25rem, 2.5vw, 2.75rem);
+}
+
+.scroll-stack-card__shade {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: #000;
+  opacity: var(--scroll-stack-dim, 0);
+  pointer-events: none;
+  z-index: 50;
+}
