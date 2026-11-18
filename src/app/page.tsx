@@ -28,7 +28,7 @@ export default function Home() {
           baseScale={0.96}
           dimAmount={0.07}
           holdDistance={120}
-          className="w-full px-4 pb-6 sm:px-6 lg:px-10 xl:px-16"
+          className="section-x w-full pb-6"
         >
           <ScrollStackItem>
             <Features />

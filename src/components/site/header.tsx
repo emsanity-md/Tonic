@@ -13,7 +13,7 @@ export function SiteHeader() {
       <div className="section-x flex h-16 w-full items-center justify-between gap-6 lg:h-18">
         <a
           href="#top"
-          className="inline-flex items-center rounded-sm"
+          className="-my-3 inline-flex items-center rounded-sm py-3"
           aria-label="Tonic, back to top"
         >
           <Wordmark />
@@ -27,7 +27,7 @@ export function SiteHeader() {
             <a
               key={item.href}
               href={item.href}
-              className="text-[0.8125rem] text-muted-foreground transition-colors hover:text-foreground"
+              className="touch-target inline-flex items-center text-[0.8125rem] text-muted-foreground transition-colors hover:text-foreground"
             >
               {item.label}
             </a>

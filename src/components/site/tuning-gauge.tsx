@@ -1,126 +1,324 @@
 "use client";
 
-import {
-  useCallback,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
-} from "react";
-import { motion, useReducedMotion } from "motion/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Mic, MicOff } from "lucide-react";
+import { TuningDial, type PitchTone } from "@/components/site/tuning-dial";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import {
+  GUITAR_STRINGS,
+  closestGuitarString,
+  createPitchDetector,
+  frequencyForMidi,
+  noteFromFrequency,
+  spellNote,
+} from "@/lib/pitch";
 
-const CX = 180;
-const CY = 196;
-const R_TICK_OUT = 150;
-const R_TICK_IN_MAJOR = 132;
-const R_TICK_IN_MINOR = 140;
-const R_ARC = 158;
-const R_NEEDLE = 120;
-const SWEEP = 52;
-const MIN_CENTS = -50;
-const MAX_CENTS = 50;
+const A4_HZ = 440;
 const IN_TUNE_CENTS = 5;
 const START_CENTS = 12;
-const A4_HZ = 440;
 
-function polar(deg: number, radius: number) {
-  const rad = (deg * Math.PI) / 180;
-  return {
-    x: CX + radius * Math.sin(rad),
-    y: CY - radius * Math.cos(rad),
-  };
+type TunerStatus =
+  | "idle"
+  | "requesting"
+  | "listening"
+  | "blocked"
+  | "unavailable"
+  | "unsupported";
+type Mode = "guitar" | "voice";
+
+interface LiveReading {
+  note: string;
+  midi: number;
+  frequency: number;
+  cents: number;
 }
 
-function arcPath(from: number, to: number, radius: number) {
-  const start = polar(from, radius);
-  const end = polar(to, radius);
-  return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${radius} ${radius} 0 0 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+interface Engine {
+  context: AudioContext;
+  stream: MediaStream;
+  analyser: AnalyserNode;
+  buffer: Float32Array<ArrayBuffer>;
+  frame: number;
+}
+
+const ERROR_COPY: Partial<Record<TunerStatus, string>> = {
+  blocked:
+    "Microphone access was blocked. Allow it in the address bar, then tap Listen again.",
+  unavailable: "No microphone was found on this device.",
+  unsupported: "This browser does not expose the microphone to the page.",
+};
+
+/** Renders "A♯4" with the accidental in the sans face, so it never falls back
+ * to a mismatched serif glyph at heading size. */
+function NoteValue({ note }: { note: string }) {
+  const parts = note.match(/^([A-G])([♯♭]?)(-?\d+)$/);
+  if (!parts) return <>{note}</>;
+  const [, letter, accidental, octave] = parts;
+  return (
+    <>
+      {letter}
+      {accidental ? (
+        <span className="inline-block translate-y-[0.04em] font-sans text-[0.72em] tracking-normal">
+          {accidental}
+        </span>
+      ) : null}
+      {octave}
+    </>
+  );
 }
 
 function formatCents(cents: number) {
   if (cents === 0) return "0¢";
-  const sign = cents > 0 ? "+" : "−";
-  return `${sign}${Math.abs(cents)}¢`;
+  return `${cents > 0 ? "+" : "−"}${Math.abs(cents)}¢`;
 }
 
-function describe(cents: number) {
-  if (Math.abs(cents) <= IN_TUNE_CENTS) return "In tune";
-  return `${Math.abs(cents)}¢ ${cents > 0 ? "sharp" : "flat"}`;
+const TONE_TEXT: Record<PitchTone, string> = {
+  idle: "text-muted-foreground",
+  flat: "text-amber-700 dark:text-amber-400",
+  "in-tune": "text-emerald-700 dark:text-emerald-400",
+  sharp: "text-red-700 dark:text-red-400",
+};
+
+const TONE_DOT: Record<PitchTone, string> = {
+  idle: "bg-muted-foreground/50",
+  flat: "bg-amber-600 dark:bg-amber-400",
+  "in-tune": "bg-emerald-600 dark:bg-emerald-400",
+  sharp: "bg-red-600 dark:bg-red-400",
+};
+
+const ACTIVE_CHIP: Record<Exclude<PitchTone, "idle">, string> = {
+  flat: "border-amber-600/50 bg-amber-500/10 text-amber-800 dark:border-amber-400/50 dark:text-amber-300",
+  "in-tune": "border-transparent bg-emerald-700 text-white dark:bg-emerald-400 dark:text-emerald-950",
+  sharp: "border-red-600/50 bg-red-500/10 text-red-800 dark:border-red-400/50 dark:text-red-300",
+};
+
+/** Display form, using the musical accidental symbols. */
+function pitchLabel(cents: number) {
+  if (Math.abs(cents) <= IN_TUNE_CENTS) return "♮ In tune";
+  const accidental = cents > 0 ? "♯" : "♭";
+  return `${accidental} ${Math.abs(cents)}¢`;
 }
 
-const ticks = Array.from({ length: 21 }, (_, index) => -50 + index * 5);
+/** Spoken form, for aria text. */
+function pitchSpoken(cents: number) {
+  if (Math.abs(cents) <= IN_TUNE_CENTS) return "in tune";
+  return `${Math.abs(cents)} cents ${cents > 0 ? "sharp" : "flat"}`;
+}
 
 export function TuningGauge({ className }: { className?: string }) {
-  const reduce = useReducedMotion();
-  const svgRef = useRef<SVGSVGElement>(null);
   const [cents, setCents] = useState(START_CENTS);
-  const [dragging, setDragging] = useState(false);
+  const [status, setStatus] = useState<TunerStatus>("idle");
+  const [mode, setMode] = useState<Mode>("guitar");
+  const [reading, setReading] = useState<LiveReading | null>(null);
+  const [stale, setStale] = useState(false);
 
-  const updateFromPointer = useCallback((event: ReactPointerEvent) => {
-    const svg = svgRef.current;
-    if (!svg) return;
+  const engineRef = useRef<Engine | null>(null);
+  const detectorRef = useRef<ReturnType<typeof createPitchDetector> | null>(null);
+  const historyRef = useRef<number[]>([]);
+  const lastMidiRef = useRef<number | null>(null);
+  const silenceRef = useRef(0);
+  const lastTickRef = useRef(0);
+  const mountedRef = useRef(true);
 
-    const rect = svg.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
+  const live = status === "listening";
 
-    const x = ((event.clientX - rect.left) / rect.width) * 360;
-    const y = ((event.clientY - rect.top) / rect.height) * 214;
-
-    // Ignore points below the hub so the needle cannot flip past the arc.
-    if (CY - y < 8) return;
-
-    const deg = (Math.atan2(x - CX, CY - y) * 180) / Math.PI;
-    const next = Math.round(
-      Math.min(MAX_CENTS, Math.max(MIN_CENTS, deg)),
-    );
-    setCents(next);
+  const teardown = useCallback(() => {
+    const engine = engineRef.current;
+    engineRef.current = null;
+    detectorRef.current = null;
+    historyRef.current = [];
+    lastMidiRef.current = null;
+    silenceRef.current = 0;
+    lastTickRef.current = 0;
+    if (!engine) return;
+    cancelAnimationFrame(engine.frame);
+    for (const track of engine.stream.getTracks()) track.stop();
+    void engine.context.close().catch(() => {});
   }, []);
 
-  const handleKeyDown = useCallback((event: ReactKeyboardEvent) => {
-    const step = event.shiftKey ? 10 : 1;
-    let next: number | null = null;
+  const stop = useCallback(() => {
+    teardown();
+    setReading(null);
+    setStale(false);
+    setStatus("idle");
+  }, [teardown]);
 
-    switch (event.key) {
-      case "ArrowLeft":
-      case "ArrowDown":
-        next = cents - step;
-        break;
-      case "ArrowRight":
-      case "ArrowUp":
-        next = cents + step;
-        break;
-      case "PageDown":
-        next = cents - 10;
-        break;
-      case "PageUp":
-        next = cents + 10;
-        break;
-      case "Home":
-        next = MIN_CENTS;
-        break;
-      case "End":
-        next = MAX_CENTS;
-        break;
-      case "0":
-      case "Escape":
-        next = 0;
-        break;
-      default:
-        return;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      teardown();
+    };
+  }, [teardown]);
+
+  const start = async () => {
+    if (engineRef.current || status === "requesting") return;
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof AudioContext === "undefined"
+    ) {
+      setStatus("unsupported");
+      return;
     }
 
-    event.preventDefault();
-    setCents(Math.min(MAX_CENTS, Math.max(MIN_CENTS, next)));
-  }, [cents]);
+    setStatus("requesting");
+    setReading(null);
+    setStale(false);
 
-  const inTune = Math.abs(cents) <= IN_TUNE_CENTS;
-  const frequency = A4_HZ * 2 ** (cents / 1200);
-  const needleTransition = reduce
-    ? { duration: 0 }
-    : dragging
-      ? { duration: 0 }
-      : { type: "spring" as const, stiffness: 320, damping: 30, mass: 0.6 };
+    // Create and resume the audio context inside the click so Safari keeps the
+    // gesture for playback, then wait on the permission prompt.
+    let context: AudioContext | null = null;
+
+    try {
+      context = new AudioContext({ latencyHint: "interactive" });
+      await context.resume();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 4096;
+      analyser.smoothingTimeConstant = 0;
+      source.connect(analyser);
+
+      const engine: Engine = {
+        context,
+        stream,
+        analyser,
+        buffer: new Float32Array(analyser.fftSize),
+        frame: 0,
+      };
+      engineRef.current = engine;
+      detectorRef.current = createPitchDetector(context.sampleRate);
+      setStatus("listening");
+
+      const loop = () => {
+        if (engineRef.current !== engine) return;
+        engine.frame = requestAnimationFrame(loop);
+
+        const now = performance.now();
+        if (now - lastTickRef.current < 50) return;
+        lastTickRef.current = now;
+
+        engine.analyser.getFloatTimeDomainData(engine.buffer);
+        const detected = detectorRef.current?.detect(engine.buffer) ?? null;
+
+        if (detected && detected.clarity >= 0.7) {
+          let frequency = detected.frequency;
+          let note = noteFromFrequency(frequency, A4_HZ);
+
+          if (lastMidiRef.current !== null && note.midi !== lastMidiRef.current) {
+            // New note: start the median window over instead of blending across.
+            historyRef.current = [frequency];
+          } else {
+            historyRef.current.push(frequency);
+            if (historyRef.current.length > 7) historyRef.current.shift();
+            const sorted = [...historyRef.current].sort((a, b) => a - b);
+            frequency = sorted[Math.floor(sorted.length / 2)];
+            note = noteFromFrequency(frequency, A4_HZ);
+          }
+
+          lastMidiRef.current = note.midi;
+          silenceRef.current = 0;
+          if (!mountedRef.current) return;
+          setReading({
+            note: note.note,
+            midi: note.midi,
+            frequency,
+            cents: note.cents,
+          });
+          setStale(false);
+        } else {
+          silenceRef.current += 1;
+          if (silenceRef.current === 12) {
+            lastMidiRef.current = null;
+            historyRef.current = [];
+            if (mountedRef.current) setStale(true);
+          }
+        }
+      };
+
+      loop();
+    } catch (error) {
+      void context?.close().catch(() => {});
+      const name = error instanceof DOMException ? error.name : "";
+      setStatus(
+        name === "NotAllowedError" || name === "SecurityError"
+          ? "blocked"
+          : "unavailable",
+      );
+    }
+  };
+
+  const liveCents = reading?.cents ?? 0;
+  const needleCents = live ? liveCents : cents;
+  const hasReading = live ? Boolean(reading) && !stale : true;
+  const tone: PitchTone = !hasReading
+    ? "idle"
+    : Math.abs(needleCents) <= IN_TUNE_CENTS
+      ? "in-tune"
+      : needleCents > 0
+        ? "sharp"
+        : "flat";
+
+  const guitarTarget = reading ? closestGuitarString(reading.midi) : null;
+  // Only claim a string when the note is actually on it, not when it is a
+  // chromatic note that happens to sit closer to one open string than another.
+  const activeString =
+    mode === "guitar" &&
+    reading &&
+    guitarTarget &&
+    Math.abs(reading.midi - guitarTarget.midi) <= 1
+      ? guitarTarget
+      : null;
+
+  const statusText = (() => {
+    if (status === "requesting") return "Asking for mic";
+    if (status === "blocked") return "Mic blocked";
+    if (status === "unsupported") return "Mic unsupported";
+    if (status === "unavailable") return "Mic unavailable";
+    if (live) {
+      if (!reading || stale) return "Listening…";
+      return pitchLabel(reading.cents);
+    }
+    return pitchLabel(cents);
+  })();
+
+  const errorCopy = ERROR_COPY[status];
+  const noteText = live ? (reading?.note ?? "—") : "A4";
+  const frequencyText = live
+    ? reading
+      ? `${reading.frequency.toFixed(1)} Hz`
+      : "—"
+    : `${(A4_HZ * 2 ** (cents / 1200)).toFixed(1)} Hz`;
+  const offsetText = live
+    ? reading
+      ? formatCents(reading.cents)
+      : "—"
+    : formatCents(cents);
+
+  // The beat a musician actually hears: the distance from the note being
+  // targeted, in Hz. A quarter of a hertz at A4 is one cent.
+  const targetFrequency = live && reading
+    ? frequencyForMidi(reading.midi, A4_HZ)
+    : A4_HZ;
+  const soundedFrequency = live
+    ? (reading?.frequency ?? null)
+    : A4_HZ * 2 ** (cents / 1200);
+  const beatFrequency =
+    soundedFrequency === null
+      ? null
+      : Math.abs(soundedFrequency - (live ? targetFrequency : A4_HZ));
+  const beatText =
+    beatFrequency === null
+      ? "—"
+      : `${beatFrequency.toFixed(beatFrequency < 10 ? 2 : 1)} Hz`;
 
   return (
     <div
@@ -135,169 +333,142 @@ export function TuningGauge({ className }: { className?: string }) {
         </p>
         <p
           className={cn(
-            "text-[0.625rem] font-semibold uppercase tracking-[0.18em] tabular-nums",
-            inTune ? "text-foreground" : "text-muted-foreground",
+            "flex items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.18em] tabular-nums",
+            TONE_TEXT[tone],
           )}
-          aria-live="polite"
+          aria-live={live ? "off" : "polite"}
         >
-          {describe(cents)}
+          <span
+            className={cn("size-1.5 rounded-full", TONE_DOT[tone])}
+            aria-hidden="true"
+          />
+          {statusText}
         </p>
       </div>
 
       <div className="px-5 pt-4 pb-2">
-        <svg
-          ref={svgRef}
-          viewBox="0 0 360 214"
-          className={cn(
-            "h-auto w-full select-none",
-            dragging ? "cursor-grabbing" : "cursor-grab",
-          )}
-          style={{ touchAction: "none" }}
-          role="slider"
-          tabIndex={0}
-          aria-label="Pitch offset in cents"
-          aria-valuemin={MIN_CENTS}
-          aria-valuemax={MAX_CENTS}
-          aria-valuenow={cents}
-          aria-valuetext={`${formatCents(cents)}, ${describe(cents)}, A4 at ${frequency.toFixed(1)} hertz`}
-          onPointerDown={(event) => {
-            event.currentTarget.setPointerCapture(event.pointerId);
-            setDragging(true);
-            updateFromPointer(event);
-          }}
-          onPointerMove={(event) => {
-            if (dragging) updateFromPointer(event);
-          }}
-          onPointerUp={() => setDragging(false)}
-          onPointerCancel={() => setDragging(false)}
-          onKeyDown={handleKeyDown}
-        >
-          <path
-            d={arcPath(-SWEEP, SWEEP, R_ARC)}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1}
-            className="text-border"
-          />
-          {Math.abs(cents) > 6 && (
-            <path
-              d={arcPath(Math.min(0, cents), Math.max(0, cents), R_ARC)}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={4}
-              strokeLinecap="round"
-              className="text-foreground/20"
-            />
-          )}
-          <path
-            d={arcPath(-6, 6, R_ARC)}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
-            strokeLinecap="round"
-            className="text-foreground"
-          />
-
-          {ticks.map((tick) => {
-            const major = tick % 10 === 0;
-            const outer = polar(tick, R_TICK_OUT);
-            const inner = polar(
-              tick,
-              major ? R_TICK_IN_MAJOR : R_TICK_IN_MINOR,
-            );
-            return (
-              <line
-                key={tick}
-                x1={outer.x}
-                y1={outer.y}
-                x2={inner.x}
-                y2={inner.y}
-                stroke="currentColor"
-                strokeWidth={major ? 1.25 : 1}
-                strokeLinecap="round"
-                className={major ? "text-muted-foreground" : "text-border"}
-              />
-            );
-          })}
-
-          <circle
-            cx={CX}
-            cy={CY}
-            r={R_NEEDLE - 16}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1}
-            className="text-border"
-            strokeDasharray="1 7"
-            strokeLinecap="round"
-          />
-
-          <motion.g
-            style={{ transformOrigin: `${CX}px ${CY}px` }}
-            initial={{ rotate: reduce ? START_CENTS : -26 }}
-            animate={{ rotate: cents }}
-            transition={needleTransition}
-          >
-            <line
-              x1={CX}
-              y1={CY - 14}
-              x2={CX}
-              y2={CY - R_NEEDLE}
-              stroke="currentColor"
-              strokeWidth={1.5}
-              strokeLinecap="round"
-              className="text-foreground"
-            />
-          </motion.g>
-
-          <circle cx={CX} cy={CY} r={3.5} className="fill-foreground" />
-          <circle
-            cx={CX}
-            cy={CY}
-            r={8}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1}
-            className="text-border"
-          />
-
-          <text
-            x={polar(-SWEEP, R_ARC + 14).x}
-            y={polar(-SWEEP, R_ARC + 14).y + 14}
-            textAnchor="middle"
-            className="fill-muted-foreground text-[9px] font-semibold tracking-[0.12em]"
-          >
-            −50¢
-          </text>
-          <text
-            x={polar(0, R_ARC + 16).x}
-            y={polar(0, R_ARC + 16).y - 2}
-            textAnchor="middle"
-            className="fill-muted-foreground text-[9px] font-semibold tracking-[0.12em]"
-          >
-            0¢
-          </text>
-          <text
-            x={polar(SWEEP, R_ARC + 14).x}
-            y={polar(SWEEP, R_ARC + 14).y + 14}
-            textAnchor="middle"
-            className="fill-muted-foreground text-[9px] font-semibold tracking-[0.12em]"
-          >
-            +50¢
-          </text>
-        </svg>
+        <TuningDial
+          cents={needleCents}
+          tone={tone}
+          interactive={!live}
+          label={
+            live ? "Live pitch offset in cents" : "Preview pitch offset in cents"
+          }
+          valueText={`${formatCents(needleCents)}, ${pitchSpoken(needleCents)}, ${spellNote(noteText)} at ${reading?.frequency.toFixed(1) ?? (A4_HZ * 2 ** (needleCents / 1200)).toFixed(1)} hertz`}
+          onCentsChange={live ? undefined : setCents}
+        />
       </div>
 
-      <p className="px-5 pb-3 text-[0.6875rem] text-muted-foreground">
-        Drag the needle to preview a pitch — or focus the gauge and use the arrow
-        keys.
+      {mode === "guitar" ? (
+        <ul
+          className="grid grid-cols-6 gap-1.5 px-5 pb-4"
+          aria-label="Guitar strings, low to high"
+        >
+          {GUITAR_STRINGS.map((string) => {
+            const active = activeString?.string === string.string;
+            const tuned =
+              active &&
+              !stale &&
+              reading !== null &&
+              Math.abs(reading.cents) <= IN_TUNE_CENTS &&
+              reading.midi === string.midi;
+
+            return (
+              <li
+                key={string.string}
+                aria-current={active ? "true" : undefined}
+                className={cn(
+                  "flex flex-col items-center gap-0.5 rounded-md border py-1.5 text-center transition-colors",
+                  tuned
+                    ? ACTIVE_CHIP["in-tune"]
+                    : active
+                      ? tone === "idle"
+                        ? "border-border bg-muted text-foreground"
+                        : ACTIVE_CHIP[tone]
+                      : "border-border text-muted-foreground",
+                )}
+              >
+                <span
+                  className={cn(
+                    "text-[0.625rem] font-semibold tabular-nums",
+                    tuned ? "opacity-90" : "opacity-70",
+                  )}
+                >
+                  {string.string}
+                </span>
+                <span className="text-[0.75rem] font-semibold leading-none">
+                  {string.note}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="px-5 pb-4 text-[0.6875rem] text-muted-foreground">
+          Chromatic · A0 – C8 · nearest note
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3">
+        <button
+          type="button"
+          onClick={live || status === "requesting" ? stop : start}
+          aria-pressed={live}
+          className={cn(
+            "touch-target inline-flex h-11 items-center gap-2 rounded-full px-4 text-[0.8125rem] font-semibold transition-colors sm:h-8 sm:px-3.5 sm:text-[0.75rem]",
+            live
+              ? "border border-border text-foreground hover:bg-muted"
+              : "bg-primary text-primary-foreground hover:bg-primary/85",
+            status === "requesting" && "opacity-70",
+          )}
+        >
+          {live ? (
+            <MicOff className="size-3.5" aria-hidden="true" />
+          ) : (
+            <Mic className="size-3.5" aria-hidden="true" />
+          )}
+          <span>
+            {status === "requesting" ? "Starting…" : live ? "Stop" : "Listen"}
+          </span>
+        </button>
+
+        <ToggleGroup
+          type="single"
+          size="sm"
+          variant="outline"
+          aria-label="Tuner mode"
+          value={mode}
+          onValueChange={(value) => {
+            if (value) setMode(value as Mode);
+          }}
+        >
+          <ToggleGroupItem
+            value="guitar"
+            className="touch-target h-11 px-3.5 text-[0.8125rem] text-muted-foreground data-[state=on]:text-foreground sm:h-7 sm:px-2.5 sm:text-[0.8rem]"
+          >
+            Guitar
+          </ToggleGroupItem>
+          <ToggleGroupItem
+            value="voice"
+            className="touch-target h-11 px-3.5 text-[0.8125rem] text-muted-foreground data-[state=on]:text-foreground sm:h-7 sm:px-2.5 sm:text-[0.8rem]"
+          >
+            Voice
+          </ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+
+      <p className="px-5 pb-3 text-[0.6875rem] leading-[1.5] text-muted-foreground">
+        {errorCopy ??
+          (live
+            ? "Play one string at a time — Tonic names the note and how far off it sits. One cent is 0.06% of the pitch."
+            : "Tap listen to tune with your microphone, or drag the needle to preview. One cent is 0.06% of the pitch — 0.25 Hz at A4.")}
       </p>
 
       <dl className="grid grid-cols-3 border-t border-border">
         {[
-          { label: "Note", value: "A4", accent: true },
-          { label: "Frequency", value: `${frequency.toFixed(1)} Hz` },
-          { label: "Offset", value: formatCents(cents) },
+          { label: "Note", value: noteText, accent: true, glyph: true },
+          { label: "Frequency", value: frequencyText },
+          { label: "Offset", value: offsetText, tone: true },
         ].map((item, index) => (
           <div
             key={item.label}
@@ -315,10 +486,24 @@ export function TuningGauge({ className }: { className?: string }) {
                 item.accent
                   ? "font-heading text-2xl leading-none"
                   : "text-sm leading-none",
+                item.tone && TONE_TEXT[tone],
+                live && stale && "opacity-60",
               )}
             >
-              {item.value}
+              {item.glyph ? <NoteValue note={String(item.value)} /> : item.value}
             </dd>
+            {item.label === "Offset" ? (
+              <p
+                className={cn(
+                  "text-[0.6875rem] leading-none text-muted-foreground tabular-nums",
+                  live && stale && "opacity-60",
+                )}
+              >
+                {beatFrequency !== null && beatFrequency < 0.05
+                  ? "no beats"
+                  : `beating ${beatText}`}
+              </p>
+            ) : null}
           </div>
         ))}
       </dl>

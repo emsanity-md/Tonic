@@ -13,7 +13,7 @@ const stats = [
     prefix: "±",
     suffix: "¢",
     label: "Cent resolution",
-    note: "A hundredth of a semitone.",
+    note: "A hundredth of a semitone — 0.06% of the pitch.",
   },
   {
     to: 0,
@@ -41,8 +41,10 @@ export function WhyCents() {
         <div className="flex flex-col gap-4 lg:col-span-4 lg:pt-9">
           <p className="max-w-[46ch] text-[0.9375rem] leading-[1.75] text-background/75">
             Every semitone is divided into one hundred cents, which makes the
-            gap between any two notes measurable rather than remembered. Tonic
-            shows you that number while you sing or play.
+            gap between any two notes measurable rather than remembered. A cent
+            is 0.06% of the pitch, so it means the same thing low or high — at
+            A4 that is a quarter of a hertz. Tonic shows you that number while
+            you sing or play.
           </p>
           <p className="max-w-[46ch] text-[0.9375rem] leading-[1.75] text-background/75">
             It is not a scoring app. It is the number you check once, then

@@ -41,7 +41,7 @@ export function ThemeToggle({ className }: { className?: string }) {
           value={value}
           aria-label={label}
           title={label}
-          className="text-muted-foreground data-[state=on]:text-foreground"
+          className="touch-target h-11 w-11 text-muted-foreground data-[state=on]:text-foreground sm:h-7 sm:w-7"
         >
           <Icon aria-hidden="true" />
         </ToggleGroupItem>

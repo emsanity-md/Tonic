@@ -9,10 +9,10 @@ const nav = [
 
 export function SiteFooter() {
   return (
-    <footer className="w-full border-t border-border bg-background">
+    <footer className="w-full border-t border-border bg-background pb-[env(safe-area-inset-bottom)]">
       <div className="section-x w-full">
-        <div className="grid w-full grid-cols-1 gap-10 py-12 lg:grid-cols-12 lg:gap-8">
-          <div className="flex flex-col gap-3 lg:col-span-5">
+        <div className="grid w-full grid-cols-1 gap-10 py-12 md:grid-cols-12 md:gap-8">
+          <div className="flex flex-col gap-3 md:col-span-5">
             <Wordmark />
             <p className="max-w-[34ch] text-[0.875rem] leading-[1.6] text-muted-foreground">
               Find your note. Sing in tune, tune any string.
@@ -21,7 +21,7 @@ export function SiteFooter() {
 
           <nav
             aria-label="Footer"
-            className="flex flex-col gap-3 lg:col-span-3"
+            className="flex flex-col gap-1 md:col-span-3"
           >
             <p className="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
               Sections
@@ -30,14 +30,14 @@ export function SiteFooter() {
               <a
                 key={item.href}
                 href={item.href}
-                className="w-fit text-[0.8125rem] text-foreground/80 underline-offset-4 hover:text-foreground hover:underline"
+                className="inline-flex min-h-11 w-fit items-center text-[0.8125rem] text-foreground/80 underline-offset-4 hover:text-foreground hover:underline"
               >
                 {item.label}
               </a>
             ))}
           </nav>
 
-          <div className="flex flex-col gap-3 lg:col-span-4 lg:items-end">
+          <div className="flex flex-col gap-3 md:col-span-4 md:items-end">
             <p className="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
               Theme
             </p>

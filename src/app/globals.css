@@ -185,6 +185,46 @@
     @apply px-4 sm:px-6 lg:px-10 xl:px-16;
   }
 
+  /* Keep touch controls at 44px on any finger-driven screen, including
+     landscape phones and tablets where the width breakpoints would otherwise
+     restore the compact desktop sizing. */
+  @media (pointer: coarse) {
+    .touch-target {
+      min-width: 2.75rem;
+      min-height: 2.75rem;
+    }
+  }
+
+  /* Clear the notch / rounded corners in landscape on notched phones. The
+     fallback values match the px scale above. */
+  @supports (padding: env(safe-area-inset-left)) {
+    .section-x {
+      padding-left: max(1rem, env(safe-area-inset-left));
+      padding-right: max(1rem, env(safe-area-inset-right));
+    }
+
+    @media (min-width: 640px) {
+      .section-x {
+        padding-left: max(1.5rem, env(safe-area-inset-left));
+        padding-right: max(1.5rem, env(safe-area-inset-right));
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .section-x {
+        padding-left: max(2.5rem, env(safe-area-inset-left));
+        padding-right: max(2.5rem, env(safe-area-inset-right));
+      }
+    }
+
+    @media (min-width: 1280px) {
+      .section-x {
+        padding-left: max(4rem, env(safe-area-inset-left));
+        padding-right: max(4rem, env(safe-area-inset-right));
+      }
+    }
+  }
+
   .edge-fade-x {
     mask-image: linear-gradient(
       to right,

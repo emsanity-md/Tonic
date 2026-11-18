@@ -448,3 +448,12 @@
   background: var(--stepper-faint);
   pointer-events: none;
 }
+
+/* Touch targets on phones. These rules live here because the stepper's own
+   declarations are unlayered and therefore win over Tailwind utilities. */
+@media (max-width: 639px), (pointer: coarse) {
+  .stepper__button,
+  .stepper__segment {
+    height: 44px;
+  }
+}

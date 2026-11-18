@@ -2,19 +2,20 @@ import { ArrowDown } from "lucide-react";
 import { BlurText } from "@/components/motion/blur-text";
 import { Reveal } from "@/components/motion/reveal";
 import { Section } from "@/components/site/section";
+import { cn } from "@/lib/utils";
 import { TuningGauge } from "@/components/site/tuning-gauge";
 
 const specs = [
   { label: "Range", value: "A0 – C8, chromatic" },
-  { label: "Resolution", value: "1 cent" },
+  { label: "Resolution", value: "±1 cent (0.06%)" },
   { label: "Reference", value: "415 – 445 Hz" },
 ];
 
 export function Hero() {
   return (
     <Section id="top" bordered={false} spacing="hero">
-      <div className="grid w-full grid-cols-1 gap-14 lg:grid-cols-12 lg:items-end lg:gap-10 xl:gap-16">
-        <div className="lg:col-span-7">
+      <div className="grid w-full grid-cols-1 items-start gap-14 md:max-lg:landscape:grid-cols-12 md:max-lg:landscape:gap-8 lg:grid-cols-12 lg:gap-10 xl:gap-16">
+        <div className="md:max-lg:landscape:col-span-6 lg:col-span-7">
           <p className="flex items-center gap-2.5 text-[0.6875rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
             <span className="h-px w-6 bg-border" aria-hidden="true" />
             Chromatic tuner for voice and strings
@@ -41,7 +42,7 @@ export function Hero() {
             </span>
             <a
               href="#how-it-works"
-              className="group inline-flex w-fit items-center gap-2 text-[0.8125rem] font-semibold text-foreground underline-offset-[6px] hover:underline"
+              className="group -my-2 inline-flex min-h-11 w-fit items-center gap-2 py-2 text-[0.8125rem] font-semibold text-foreground underline-offset-[6px] hover:underline"
             >
               See how it works
               <ArrowDown
@@ -56,7 +57,7 @@ export function Hero() {
           </p>
         </div>
 
-        <div className="lg:col-span-5">
+        <div className="md:max-lg:landscape:col-span-6 lg:col-span-5">
           <Reveal delay={0.15} y={24}>
             <TuningGauge />
           </Reveal>
@@ -67,11 +68,12 @@ export function Hero() {
         {specs.map((spec, index) => (
           <div
             key={spec.label}
-            className={
+            className={cn(
+              "flex items-baseline justify-between gap-4 py-3 sm:flex-col sm:items-start sm:justify-start sm:gap-1 sm:py-4",
               index === 0
-                ? "flex flex-col gap-1 py-4 sm:pr-6"
-                : "flex flex-col gap-1 border-t border-border py-4 sm:border-t-0 sm:border-l sm:px-6"
-            }
+                ? "sm:pr-6"
+                : "border-t border-border sm:border-t-0 sm:border-l sm:px-6",
+            )}
           >
             <dt className="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
               {spec.label}

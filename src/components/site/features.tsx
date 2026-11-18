@@ -101,7 +101,7 @@ export function Features() {
                   <button
                     type="button"
                     onClick={() => setStep(1)}
-                    className="inline-flex h-9 items-center rounded-lg bg-primary px-4 text-[0.8125rem] font-semibold text-primary-foreground transition-colors hover:bg-primary/85"
+                    className="inline-flex h-11 items-center rounded-lg bg-primary px-4 text-[0.8125rem] sm:h-9 font-semibold text-primary-foreground transition-colors hover:bg-primary/85"
                   >
                     Start over
                   </button>
